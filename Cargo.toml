@@ -1,0 +1,21 @@
+[package]
+name = "mypad"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.14.0", features = ["tokio", "highlighter", "markdown", "advanced", "image"] }
+notify = "8.0.0"
+open = "5.3.2"
+pulldown-cmark = "0.13.0"
+rfd = "0.15.3"
+syntect = "5.2.0"
+windows-registry = "0.6"
+
+[dev-dependencies]
+tempfile = "3.17.1"
+
+[build-dependencies]
+image = "0.25"
+ico = "0.4"
+winres = "0.1"

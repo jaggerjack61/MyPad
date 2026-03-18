@@ -2,7 +2,6 @@
 
 A minimal code editor built with Rust and [Iced](https://iced.rs), featuring syntax highlighting and live Markdown preview.
 
-![MyPad](icon.png)
 
 ## Features
 

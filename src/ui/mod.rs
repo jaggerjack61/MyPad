@@ -9,7 +9,7 @@ use crate::syntax;
 use iced::alignment::{Horizontal, Vertical};
 use iced::highlighter;
 use iced::keyboard::{self, Key, Modifiers};
-use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, stack, text, text_editor, Space};
+use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, stack, text, text_editor, tooltip, Space};
 use iced::{
     window, Background, Border, Color, Element, Fill, Font, Length, Shadow, Subscription, Task,
     Theme, Vector,
@@ -32,6 +32,7 @@ enum Message {
     OpenFolder,
     Save,
     TogglePreview,
+    TogglePreviewFullscreen,
     ToggleTheme,
     ToggleContextMenu,
     ShowAbout,
@@ -97,6 +98,7 @@ struct App {
     watcher: Option<WorkspaceWatcher>,
     markdown_items: Vec<iced::widget::markdown::Item>,
     preview_open: bool,
+    preview_fullscreen: bool,
     theme_mode: ThemeMode,
     status: String,
     last_tree_click: Option<(PathBuf, Instant)>,
@@ -135,6 +137,7 @@ impl App {
             watcher: None,
             markdown_items: Vec::new(),
             preview_open: true,
+            preview_fullscreen: false,
             theme_mode: ThemeMode::Light,
             status: "Open a file or folder to start editing.".to_string(),
             last_tree_click: None,
@@ -218,10 +221,26 @@ impl App {
             Message::TogglePreview => {
                 self.open_menu = None;
                 self.preview_open = !self.preview_open;
+                if !self.preview_open {
+                    self.preview_fullscreen = false;
+                }
                 self.status = if self.preview_open {
                     "Markdown preview enabled.".to_string()
                 } else {
                     "Markdown preview hidden.".to_string()
+                };
+                Task::none()
+            }
+            Message::TogglePreviewFullscreen => {
+                self.open_menu = None;
+                self.preview_fullscreen = !self.preview_fullscreen;
+                if self.preview_fullscreen {
+                    self.preview_open = true;
+                }
+                self.status = if self.preview_fullscreen {
+                    "Preview expanded to full width.".to_string()
+                } else {
+                    "Preview restored to side panel.".to_string()
                 };
                 Task::none()
             }
@@ -390,14 +409,19 @@ impl App {
         let chrome = self.chrome_view(palette);
 
         let mut content_row = row![].spacing(content_section_gap()).height(Fill);
+        let show_preview = self.preview_open && is_markdown_file(self.editor.path());
 
-        if let Some(tree) = &self.tree {
-            content_row = content_row.push(self.sidebar_view(tree));
+        if !self.preview_fullscreen {
+            if let Some(tree) = &self.tree {
+                content_row = content_row.push(self.sidebar_view(tree));
+            }
         }
 
-        content_row = content_row.push(self.editor_view());
+        if !self.preview_fullscreen {
+            content_row = content_row.push(self.editor_view());
+        }
 
-        if self.preview_open && is_markdown_file(self.editor.path()) {
+        if show_preview {
             content_row = content_row.push(self.preview_view());
         }
 
@@ -446,50 +470,50 @@ impl App {
             column![
                 text("Unsupported File")
                     .font(Self::display_font())
-                    .size(18)
+                    .size(16)
                     .color(palette.text_strong),
                 text(message.to_string())
                     .font(Self::body_font())
-                    .size(14)
+                    .size(13)
                     .color(palette.text_muted),
                 container(
                     row![
                         button(
                             text("Open Anyway")
                                 .font(Self::body_font())
-                                .size(14)
+                                .size(12)
                                 .align_x(Horizontal::Center)
                                 .width(Fill)
-                                .color(palette.accent_text),
+                                .color(palette.text_muted),
                         )
-                        .width(130)
-                        .height(34)
-                        .padding([8, 16])
-                        .style(move |_, status| compact_button_style(palette, true, status))
+                        .width(110)
+                        .height(30)
+                        .padding([6, 12])
+                        .style(move |_, status| compact_button_style(palette, false, status))
                         .on_press(Message::OpenAnyway),
                         button(
-                            text("OK")
+                            text("Dismiss")
                                 .font(Self::body_font())
-                                .size(14)
+                                .size(12)
                                 .align_x(Horizontal::Center)
                                 .width(Fill)
                                 .color(palette.accent_text),
                         )
                         .width(80)
-                        .height(34)
-                        .padding([8, 16])
+                        .height(30)
+                        .padding([6, 12])
                         .style(move |_, status| compact_button_style(palette, true, status))
                         .on_press(Message::DismissModal),
                     ]
-                    .spacing(8),
+                    .spacing(6),
                 )
                 .width(Fill)
                 .align_x(Horizontal::Right),
             ]
-            .spacing(12)
-            .width(300),
+            .spacing(10)
+            .width(280),
         )
-        .padding([20, 24])
+        .padding([18, 22])
         .style(menu_panel_style(palette));
 
         mouse_area(
@@ -569,18 +593,21 @@ impl App {
                 WindowControlKind::Minimize,
                 "—",
                 Message::MinimizeWindow,
+                "Minimize",
             ),
             window_control_button(
                 palette,
                 WindowControlKind::Maximize,
                 "□",
                 Message::ToggleMaximizeWindow,
+                "Maximize",
             ),
             window_control_button(
                 palette,
                 WindowControlKind::Close,
                 "×",
                 Message::CloseWindow,
+                "Close",
             ),
         ]
         .spacing(6)
@@ -625,6 +652,15 @@ impl App {
                         "Show Markdown Preview"
                     },
                     Message::TogglePreview,
+                ),
+                menu_item_button(
+                    palette,
+                    if self.preview_fullscreen {
+                        "Exit Full Preview"
+                    } else {
+                        "Full Preview"
+                    },
+                    Message::TogglePreviewFullscreen,
                 ),
                 menu_item_button(
                     palette,
@@ -812,28 +848,28 @@ impl App {
         let header = container(
             column![
                 text("WORKSPACE")
-                    .font(Self::body_font())
-                    .size(11)
+                    .font(Self::mono_font())
+                    .size(9)
                     .color(palette.text_soft),
                 row![
                     column![
                         text(workspace_label)
                             .font(Self::display_font())
-                            .size(19)
+                            .size(18)
                             .color(palette.text_strong),
-                        text(format!("{} visible items", visible.len().saturating_sub(1)))
+                        text(format!("{} items", visible.len().saturating_sub(1)))
                             .font(Self::body_font())
-                            .size(12)
-                            .color(palette.text_muted),
+                            .size(11)
+                            .color(palette.text_soft),
                     ]
                     .spacing(2)
                     .width(Fill),
-                    compact_button(palette, "Open Folder", Message::OpenFolder, true),
+                    icon_button(palette, "\u{1F4C2}", Message::OpenFolder, true, "Open folder"),
                 ]
                 .align_y(Vertical::Center)
-                .spacing(10),
+                .spacing(8),
             ]
-            .spacing(10),
+            .spacing(8),
         )
         .height(header_bar_height())
         .padding([12, 14])
@@ -845,9 +881,9 @@ impl App {
             let is_active = self.editor.path().is_some_and(|path| path == node.path.as_path());
             let prefix = if node.is_dir {
                 if node.expanded {
-                    "v"
+                    "\u{25BE}"
                 } else {
-                    ">"
+                    "\u{25B8}"
                 }
             } else {
                 ""
@@ -856,29 +892,31 @@ impl App {
             let button = button(
                 row![
                     text(prefix)
-                        .font(Self::mono_font())
-                        .size(11)
-                        .width(14)
+                        .font(Self::body_font())
+                        .size(10)
+                        .width(12)
                         .color(if node.is_dir {
-                            palette.text_muted
+                            palette.text_soft
                         } else {
                             Color::TRANSPARENT
                         }),
                     text(node.name.clone())
-                        .font(Self::body_font())
-                        .size(14)
+                        .font(if node.is_dir { Self::body_font() } else { Self::mono_font() })
+                        .size(13)
                         .color(if is_active {
                             palette.accent_text
+                        } else if node.is_dir {
+                            palette.text_muted
                         } else {
                             palette.text_strong
                         })
                         .width(Fill),
                 ]
                 .align_y(Vertical::Center)
-                .spacing(8),
+                .spacing(6),
             )
             .width(Fill)
-            .padding([7, 10])
+            .padding([6, 10])
             .style(tree_button_style(palette, is_active))
             .on_press(Message::TreePressed(node.path.clone()));
 
@@ -927,17 +965,17 @@ impl App {
             row![
                 column![
                     text("DOCUMENT")
-                        .font(Self::body_font())
-                        .size(11)
+                        .font(Self::mono_font())
+                        .size(9)
                         .color(palette.text_soft),
                     text(self.editor.file_label())
                         .font(Self::display_font())
-                        .size(20)
+                        .size(18)
                         .color(palette.text_strong),
                     text(breadcrumb)
                         .font(Self::body_font())
-                        .size(13)
-                        .color(palette.text_muted),
+                        .size(12)
+                        .color(palette.text_soft),
                 ]
                 .spacing(2)
                 .width(Fill),
@@ -945,24 +983,29 @@ impl App {
                     info_pill(palette, syntax_profile.extension.to_uppercase(), false),
                     info_pill(
                         palette,
-                        if self.editor.is_dirty() { "Modified" } else { "Saved" },
+                        if self.editor.is_dirty() { "\u{25CF}" } else { "\u{2713}" },
                         self.editor.is_dirty(),
                     ),
                 ]
-                .spacing(8),
+                .spacing(6),
                 if is_markdown_file(self.editor.path()) {
-                    compact_button(
+                    icon_button(
                         palette,
                         if self.preview_open {
-                            "Hide Preview"
+                            "\u{25A8}"
                         } else {
-                            "Show Preview"
+                            "\u{25A3}"
                         },
                         Message::TogglePreview,
                         self.preview_open,
+                        if self.preview_open {
+                            "Hide preview"
+                        } else {
+                            "Show preview"
+                        },
                     )
                 } else {
-                    compact_button(palette, "Open File", Message::OpenFile, false)
+                    icon_button(palette, "\u{1F4C4}", Message::OpenFile, false, "Open file")
                 },
             ]
             .align_y(Vertical::Center)
@@ -989,32 +1032,32 @@ impl App {
 
         let status = row![
             text(syntax_profile.syntax_name)
+                .font(Self::mono_font())
+                .size(11)
+                .color(palette.text_soft),
+            text(if self.editor.is_dirty() { "\u{25CF}" } else { "\u{25CB}" })
                 .font(Self::body_font())
-                .size(13)
-                .color(palette.text_muted),
-            text(if self.editor.is_dirty() { "Unsaved changes" } else { "Saved" })
-                .font(Self::body_font())
-                .size(13)
+                .size(10)
                 .color(if self.editor.is_dirty() {
                     palette.warning
                 } else {
-                    palette.text_muted
+                    palette.text_soft
                 }),
             text(self.status.clone())
                 .font(Self::body_font())
-                .size(12)
+                .size(11)
                 .width(Fill)
                 .color(palette.text_soft),
             text(format!(
-                "Ln {}, Col {}",
+                "{}:{}",
                 self.editor.cursor_location().line,
                 self.editor.cursor_location().column
             ))
             .font(Self::mono_font())
-            .size(13)
-            .color(palette.text_muted),
+            .size(11)
+            .color(palette.text_soft),
         ]
-        .spacing(12)
+        .spacing(10)
         .align_y(Vertical::Center);
 
         let gutter_scroll = scrollable(gutter.spacing(8))
@@ -1031,7 +1074,7 @@ impl App {
                 ]
                 .height(Fill),
                 separator(palette.divider),
-                container(status).padding([12, 16])
+                container(status).padding([8, 16])
             ]
             .height(Fill)
             .spacing(0),
@@ -1055,22 +1098,36 @@ impl App {
         let preview_header = container(
             row![
                 column![
-                    text("MARKDOWN")
+                    text("PREVIEW")
+                        .font(Self::mono_font())
+                        .size(9)
+                        .color(palette.text_soft),
+                    text("Markdown")
+                        .font(Self::display_font())
+                        .size(18)
+                        .color(palette.text_strong),
+                    text("Live render")
                         .font(Self::body_font())
                         .size(11)
                         .color(palette.text_soft),
-                    text("Live Preview")
-                        .font(Self::display_font())
-                        .size(19)
-                        .color(palette.text_strong),
-                    text("Rendered side by side while you edit")
-                        .font(Self::body_font())
-                        .size(12)
-                        .color(palette.text_muted),
                 ]
                 .spacing(2)
                 .width(Fill),
-                info_pill(palette, "Linked", false),
+                icon_button(
+                    palette,
+                    if self.preview_fullscreen {
+                        "\u{25F0}"
+                    } else {
+                        "\u{25F1}"
+                    },
+                    Message::TogglePreviewFullscreen,
+                    self.preview_fullscreen,
+                    if self.preview_fullscreen {
+                        "Show editor"
+                    } else {
+                        "Full preview"
+                    },
+                ),
             ]
             .align_y(Vertical::Center),
         )
@@ -1093,7 +1150,7 @@ impl App {
 
         column![preview_header, preview_body]
             .spacing(content_section_gap())
-            .width(PREVIEW_WIDTH)
+            .width(if self.preview_fullscreen { Length::Fill } else { Length::Fixed(PREVIEW_WIDTH) })
             .height(Fill)
             .into()
     }
@@ -1376,6 +1433,24 @@ fn menu_panel_style(palette: Palette) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+fn tooltip_style(palette: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        text_color: None,
+        background: Some(Background::Color(with_alpha(palette.card_strong, 0.96))),
+        border: Border {
+            color: with_alpha(palette.border, 0.5),
+            width: subtle_border_width(),
+            radius: 0.0.into(),
+        },
+        shadow: Shadow {
+            color: palette.shadow,
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 6.0,
+        },
+        snap: false,
+    }
+}
+
 fn tree_button_style(
     palette: Palette,
     is_active: bool,
@@ -1509,39 +1584,54 @@ fn menu_item_button(
 fn theme_toggle_button(
     palette: Palette,
     theme_mode: ThemeMode,
-) -> iced::widget::Button<'static, Message> {
-    compact_button(
+) -> Element<'static, Message> {
+    icon_button(
         palette,
         match theme_mode {
-            ThemeMode::Light => "Dark",
-            ThemeMode::Dark => "Light",
+            ThemeMode::Light => "\u{263E}",
+            ThemeMode::Dark => "\u{2600}",
         },
         Message::ToggleTheme,
         true,
+        match theme_mode {
+            ThemeMode::Light => "Dark theme",
+            ThemeMode::Dark => "Light theme",
+        },
     )
 }
 
-fn compact_button(
+fn icon_button(
     palette: Palette,
-    label: impl Into<String>,
+    symbol: &'static str,
     message: Message,
     emphasized: bool,
-) -> iced::widget::Button<'static, Message> {
-    let label = label.into();
-
-    button(
-        text(label)
+    hint: &'static str,
+) -> Element<'static, Message> {
+    let btn = button(
+        text(symbol)
             .font(App::body_font())
-            .size(13)
+            .size(15)
+            .align_x(Horizontal::Center)
+            .width(Fill)
             .color(if emphasized {
                 palette.accent_text
             } else {
                 palette.text_muted
             }),
     )
-    .padding([7, 10])
+    .width(32)
+    .padding([6, 0])
     .style(move |_, status| compact_button_style(palette, emphasized, status))
-    .on_press(message)
+    .on_press(message);
+
+    tooltip(
+        btn,
+        text(hint).font(App::body_font()).size(11).color(palette.text_muted),
+        tooltip::Position::Bottom,
+    )
+    .gap(4)
+    .style(tooltip_style(palette))
+    .into()
 }
 
 fn compact_button_style(
@@ -1591,15 +1681,15 @@ fn info_pill(
 
     container(
         text(label)
-            .font(App::body_font())
-            .size(12)
+            .font(App::mono_font())
+            .size(10)
             .color(if emphasized {
                 palette.accent_text
             } else {
-                palette.text_muted
+                palette.text_soft
             }),
     )
-    .padding([6, 10])
+    .padding([4, 8])
     .style(move |_| container::Style {
         text_color: None,
         background: Some(Background::Color(if emphasized {
@@ -1639,8 +1729,9 @@ fn window_control_button(
     kind: WindowControlKind,
     label: &'static str,
     message: Message,
-) -> iced::widget::Button<'static, Message> {
-    button(
+    hint: &'static str,
+) -> Element<'static, Message> {
+    let btn = button(
         text(label)
             .font(App::body_font())
             .size(15)
@@ -1650,7 +1741,16 @@ fn window_control_button(
     .width(34)
     .padding([7, 0])
     .style(move |_, status| window_control_style(palette, kind, status))
-    .on_press(message)
+    .on_press(message);
+
+    tooltip(
+        btn,
+        text(hint).font(App::body_font()).size(11).color(palette.text_muted),
+        tooltip::Position::Bottom,
+    )
+    .gap(4)
+    .style(tooltip_style(palette))
+    .into()
 }
 
 fn window_control_style(
@@ -2162,5 +2262,33 @@ mod tests {
             deadline.is_none(),
             "Cause 7: deadline must be cancelled when overlay is re-entered"
         );
+    }
+
+    // ── Preview fullscreen toggle ────────────────────────────────────
+
+    #[test]
+    fn preview_fullscreen_defaults_to_off() {
+        let (app, _) = super::App::new(None);
+        assert!(!app.preview_fullscreen);
+        assert!(app.preview_open);
+    }
+
+    #[test]
+    fn toggling_preview_fullscreen_enables_preview() {
+        let (mut app, _) = super::App::new(None);
+        app.preview_open = false;
+        let _ = app.update(super::Message::TogglePreviewFullscreen);
+        assert!(app.preview_fullscreen);
+        assert!(app.preview_open, "fullscreen should force preview_open");
+    }
+
+    #[test]
+    fn hiding_preview_clears_fullscreen() {
+        let (mut app, _) = super::App::new(None);
+        app.preview_fullscreen = true;
+        app.preview_open = true;
+        let _ = app.update(super::Message::TogglePreview);
+        assert!(!app.preview_open);
+        assert!(!app.preview_fullscreen, "hiding preview should exit fullscreen");
     }
 }

@@ -44,6 +44,7 @@ enum Message {
     EditorAction(text_editor::Action),
     TreePressed(PathBuf),
     LinkClicked(String),
+    OpenAboutRepo,
     ScrollActivity(Instant),
     PollWatcher,
     UiPulse,
@@ -91,6 +92,12 @@ struct MenuRegionState {
     overlay_hovered: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModalState {
+    UnsupportedFile { message: String, path: PathBuf },
+    About,
+}
+
 struct App {
     editor: EditorBuffer,
     tree: Option<FileNode>,
@@ -104,7 +111,7 @@ struct App {
     last_tree_click: Option<(PathBuf, Instant)>,
     scrollbar_flash_until: Option<Instant>,
     context_menu_registered: bool,
-    modal_message: Option<(String, PathBuf)>,
+    modal: Option<ModalState>,
     open_menu: Option<MenuKind>,
     menu_regions: MenuRegionState,
     menu_close_deadline: Option<Instant>,
@@ -143,7 +150,7 @@ impl App {
             last_tree_click: None,
             scrollbar_flash_until: None,
             context_menu_registered: context_menu::is_registered(),
-            modal_message: None,
+            modal: None,
             open_menu: None,
             menu_regions: MenuRegionState::default(),
             menu_close_deadline: None,
@@ -283,9 +290,7 @@ impl App {
             }
             Message::ShowAbout => {
                 self.open_menu = None;
-                self.status =
-                    "MyPad: a minimal Rust editor with syntax highlighting and live Markdown preview."
-                        .to_string();
+                self.modal = Some(ModalState::About);
                 Task::none()
             }
             Message::ShowShortcuts => {
@@ -333,11 +338,26 @@ impl App {
             }
             Message::LinkClicked(link) => {
                 self.open_menu = None;
+                self.modal = None;
 
                 if let Err(error) = open::that(link.as_str()) {
                     self.status = format!("Failed to open link: {error}");
                 } else {
                     self.status = format!("Opened link: {link}");
+                }
+
+                Task::none()
+            }
+            Message::OpenAboutRepo => {
+                self.open_menu = None;
+                self.modal = None;
+
+                let repo = about_repo_url();
+
+                if let Err(error) = open::that(repo) {
+                    self.status = format!("Failed to open link: {error}");
+                } else {
+                    self.status = format!("Opened link: {repo}");
                 }
 
                 Task::none()
@@ -386,17 +406,17 @@ impl App {
 
                 if is_escape_shortcut(&event) {
                     self.open_menu = None;
-                    self.modal_message = None;
+                    self.modal = None;
                 }
 
                 Task::none()
             }
             Message::DismissModal => {
-                self.modal_message = None;
+                self.modal = None;
                 Task::none()
             }
             Message::OpenAnyway => {
-                if let Some((_, path)) = self.modal_message.take() {
+                if let Some(ModalState::UnsupportedFile { path, .. }) = self.modal.take() {
                     self.open_file(path);
                 }
                 Task::none()
@@ -445,10 +465,10 @@ impl App {
             base.into()
         };
 
-        if let Some((msg, _)) = &self.modal_message {
+        if let Some(modal) = &self.modal {
             stack([
                 layered,
-                opaque(self.modal_overlay(msg, palette)),
+                opaque(self.modal_overlay(modal, palette)),
             ])
             .width(Fill)
             .height(Fill)
@@ -465,56 +485,108 @@ impl App {
             .into()
     }
 
-    fn modal_overlay(&self, message: &str, palette: Palette) -> Element<'_, Message> {
-        let card = container(
-            column![
-                text("Unsupported File")
-                    .font(Self::display_font())
-                    .size(16)
-                    .color(palette.text_strong),
-                text(message.to_string())
-                    .font(Self::body_font())
-                    .size(13)
-                    .color(palette.text_muted),
-                container(
+    fn modal_overlay(&self, modal: &ModalState, palette: Palette) -> Element<'_, Message> {
+        let card = match modal {
+            ModalState::UnsupportedFile { message, .. } => container(
+                column![
+                    text("Unsupported File")
+                        .font(Self::display_font())
+                        .size(16)
+                        .color(palette.text_strong),
+                    text(message.clone())
+                        .font(Self::body_font())
+                        .size(13)
+                        .color(palette.text_muted),
+                    container(
+                        row![
+                            icon_button(
+                                palette,
+                                open_anyway_icon(),
+                                Message::OpenAnyway,
+                                false,
+                                "Open anyway",
+                            ),
+                            icon_button(
+                                palette,
+                                dismiss_icon(),
+                                Message::DismissModal,
+                                true,
+                                "Dismiss",
+                            ),
+                        ]
+                        .spacing(8),
+                    )
+                    .width(Fill)
+                    .align_x(Horizontal::Right),
+                ]
+                .spacing(10)
+                .width(280),
+            )
+            .padding([18, 22])
+            .style(menu_panel_style(palette)),
+            ModalState::About => container(
+                column![
                     row![
-                        button(
-                            text("Open Anyway")
-                                .font(Self::body_font())
-                                .size(12)
-                                .align_x(Horizontal::Center)
-                                .width(Fill)
-                                .color(palette.text_muted),
-                        )
-                        .width(110)
-                        .height(30)
-                        .padding([6, 12])
-                        .style(move |_, status| compact_button_style(palette, false, status))
-                        .on_press(Message::OpenAnyway),
-                        button(
-                            text("Dismiss")
-                                .font(Self::body_font())
-                                .size(12)
-                                .align_x(Horizontal::Center)
-                                .width(Fill)
-                                .color(palette.accent_text),
-                        )
-                        .width(80)
-                        .height(30)
-                        .padding([6, 12])
-                        .style(move |_, status| compact_button_style(palette, true, status))
-                        .on_press(Message::DismissModal),
+                        info_pill(palette, "RUST EDITOR", true),
+                        info_pill(palette, "LIGHTWEIGHT", false),
                     ]
                     .spacing(6),
-                )
-                .width(Fill)
-                .align_x(Horizontal::Right),
-            ]
-            .spacing(10)
-            .width(280),
-        )
-        .padding([18, 22])
-        .style(menu_panel_style(palette));
+                    column![
+                        text("About MyPad")
+                            .font(Self::display_font())
+                            .size(24)
+                            .color(palette.text_strong),
+                        text(about_body_message())
+                            .font(Self::body_font())
+                            .size(13)
+                            .line_height(1.45)
+                            .color(palette.text_muted),
+                    ]
+                    .spacing(8),
+                    container(
+                        column![
+                            text("Repository")
+                                .font(Self::mono_font())
+                                .size(10)
+                                .color(palette.text_soft),
+                            text(about_repo_url())
+                                .font(Self::mono_font())
+                                .size(12)
+                                .color(palette.accent_text),
+                        ]
+                        .spacing(4),
+                    )
+                    .padding([10, 12])
+                    .width(Fill)
+                    .style(modal_inline_panel_style(palette)),
+                    container(
+                        row![
+                            icon_button(
+                                palette,
+                                dismiss_icon(),
+                                Message::DismissModal,
+                                false,
+                                "Close",
+                            ),
+                            icon_button(
+                                palette,
+                                about_repo_icon(),
+                                Message::OpenAboutRepo,
+                                true,
+                                "Open repository",
+                            ),
+                        ]
+                        .spacing(8),
+                    )
+                    .width(Fill)
+                    .align_x(Horizontal::Right),
+                ]
+                .spacing(14)
+                .width(360),
+            )
+            .padding([20, 22])
+            .style(modal_card_style(palette)),
+        };
 
         mouse_area(
             container(card)
@@ -785,10 +857,10 @@ impl App {
                 let name = path.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
-                self.modal_message = Some((format!(
-                    "\"{}\" is not a supported file type.",
-                    name
-                ), path));
+                self.modal = Some(ModalState::UnsupportedFile {
+                    message: format!("\"{}\" is not a supported file type.", name),
+                    path,
+                });
             }
         } else {
             self.status = "Double-click a file in the sidebar to open it.".to_string();
@@ -1433,6 +1505,50 @@ fn menu_panel_style(palette: Palette) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+fn modal_card_style(palette: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        text_color: None,
+        background: Some(Background::Color(with_alpha(palette.card_strong, 0.99))),
+        border: Border {
+            color: with_alpha(palette.border, 0.85),
+            width: subtle_border_width(),
+            radius: menu_shell_radius().into(),
+        },
+        shadow: Shadow {
+            color: palette.shadow,
+            offset: Vector::new(0.0, 10.0),
+            blur_radius: 22.0,
+        },
+        snap: false,
+    }
+}
+
+fn modal_inline_panel_style(palette: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        text_color: None,
+        background: Some(Background::Color(with_alpha(palette.accent, 0.08))),
+        border: Border {
+            color: with_alpha(palette.border, 0.55),
+            width: subtle_border_width(),
+            radius: menu_shell_radius().into(),
+        },
+        shadow: Shadow::default(),
+        snap: false,
+    }
+}
+
+fn dismiss_icon() -> &'static str {
+    "×"
+}
+
+fn open_anyway_icon() -> &'static str {
+    "↗"
+}
+
+fn about_repo_icon() -> &'static str {
+    "↗"
+}
+
 fn tooltip_style(palette: Palette) -> impl Fn(&Theme) -> container::Style {
     move |_| container::Style {
         text_color: None,
@@ -1954,6 +2070,14 @@ fn scrollbar_is_visible(
     }
 }
 
+fn about_body_message() -> &'static str {
+    "MyPad is a lightweight Rust editor made by Samuel Jarai. GitHub: https://github.com/jaggerjack61/MyPad"
+}
+
+fn about_repo_url() -> &'static str {
+    "https://github.com/jaggerjack61/MyPad"
+}
+
 fn separator(color: Color) -> iced::widget::Container<'static, Message> {
     container(Space::new().height(1))
         .width(Fill)
@@ -1970,12 +2094,13 @@ fn separator(color: Color) -> iced::widget::Container<'static, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
-        body_surface_color, breadcrumb_path, card_radius, content_section_gap,
-        control_radius, header_bar_height, menu_close_deadline, menu_close_delay,
-        menu_overlay_offset_y, menu_shell_radius, menu_should_close,
-        next_menu_hover_state, scrollbar_alpha, subtle_border_width, toggle_menu,
-        tree_indent, window_title_label, HoverRegion, MenuKind, MenuRegionState,
-        Palette, SectionTone, TITLEBAR_INSET_Y,
+        about_body_message, about_repo_icon, body_surface_color, breadcrumb_path, card_radius,
+        content_section_gap, control_radius, header_bar_height, menu_close_deadline,
+        dismiss_icon, menu_close_delay, menu_overlay_offset_y, menu_shell_radius,
+        menu_should_close, next_menu_hover_state, open_anyway_icon, scrollbar_alpha,
+        subtle_border_width, toggle_menu, tree_indent, window_title_label,
+        HoverRegion, MenuKind, MenuRegionState, ModalState, Palette, SectionTone,
+        TITLEBAR_INSET_Y,
     };
     use crate::editor::EditorBuffer;
     use std::path::{Path, PathBuf};
@@ -1987,6 +2112,40 @@ mod tests {
         assert_eq!(control_radius(), 0.0);
         assert!(menu_shell_radius() > 0.0);
         assert!(subtle_border_width() < 1.0);
+    }
+
+    #[test]
+    fn about_copy_mentions_author_and_repo() {
+        assert_eq!(
+            about_body_message(),
+            "MyPad is a lightweight Rust editor made by Samuel Jarai. GitHub: https://github.com/jaggerjack61/MyPad"
+        );
+    }
+
+    #[test]
+    fn modal_actions_use_icon_glyphs() {
+        assert_eq!(dismiss_icon(), "×");
+        assert_eq!(open_anyway_icon(), "↗");
+        assert_eq!(about_repo_icon(), "↗");
+    }
+
+    #[test]
+    fn show_about_opens_about_modal() {
+        let (mut app, _) = super::App::new(None);
+
+        let _ = app.update(super::Message::ShowAbout);
+
+        assert_eq!(app.modal, Some(ModalState::About));
+    }
+
+    #[test]
+    fn dismiss_modal_closes_about_modal() {
+        let (mut app, _) = super::App::new(None);
+        let _ = app.update(super::Message::ShowAbout);
+
+        let _ = app.update(super::Message::DismissModal);
+
+        assert_eq!(app.modal, None);
     }
 
     #[test]

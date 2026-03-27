@@ -31,6 +31,8 @@ enum Message {
     OpenFile,
     OpenFolder,
     Save,
+    Undo,
+    Redo,
     TogglePreview,
     TogglePreviewFullscreen,
     ToggleTheme,
@@ -225,6 +227,26 @@ impl App {
                 self.save_active_file();
                 Task::none()
             }
+            Message::Undo => {
+                if self.editor.undo() {
+                    self.refresh_markdown();
+                    self.status = "Undid last edit.".to_string();
+                } else {
+                    self.status = "Nothing to undo.".to_string();
+                }
+
+                Task::none()
+            }
+            Message::Redo => {
+                if self.editor.redo() {
+                    self.refresh_markdown();
+                    self.status = "Redid last edit.".to_string();
+                } else {
+                    self.status = "Nothing to redo.".to_string();
+                }
+
+                Task::none()
+            }
             Message::TogglePreview => {
                 self.open_menu = None;
                 self.preview_open = !self.preview_open;
@@ -296,7 +318,7 @@ impl App {
             Message::ShowShortcuts => {
                 self.open_menu = None;
                 self.status =
-                    "Shortcuts: Ctrl+S saves the active file. Double-click a sidebar file to open it."
+                    "Shortcuts: Ctrl+S saves, Ctrl+Z undoes, Ctrl+Shift+Z redoes, and Tab indents. Double-click a sidebar file to open it."
                         .to_string();
                 Task::none()
             }
@@ -760,6 +782,8 @@ impl App {
                 menu_item_button(palette, "Keyboard Shortcuts", Message::ShowShortcuts),
                 separator(palette.divider),
                 menu_info_line(palette, "Ctrl+S saves the active file"),
+                menu_info_line(palette, "Ctrl+Z undoes, Ctrl+Shift+Z redoes"),
+                menu_info_line(palette, "Tab indents, Shift+Tab unindents"),
                 menu_info_line(palette, "Double-click a file to open it"),
             ]
             .spacing(4),
@@ -890,10 +914,14 @@ impl App {
 
             if touched_active_file && !self.editor.is_dirty() {
                 if let Ok(contents) = read_text_file(&active_file) {
-                    self.editor.set_from_disk(Some(active_file.clone()), contents);
-                    self.refresh_markdown();
-                    self.status =
-                        format!("Reloaded {} after external change.", active_file.display());
+                    if contents != self.editor.text() {
+                        self.editor.reload_from_disk(Some(active_file.clone()), contents);
+                        self.refresh_markdown();
+                        self.status = format!(
+                            "Reloaded {} after external change.",
+                            active_file.display()
+                        );
+                    }
                 }
             }
         }
@@ -1092,6 +1120,7 @@ impl App {
             .size(16)
             .line_height(1.45)
             .placeholder("Open a file or folder to start writing...")
+            .key_binding(editor_key_binding)
             .on_action(Message::EditorAction)
             .style(text_editor_style(palette))
             .highlight(
@@ -1368,6 +1397,45 @@ fn is_save_shortcut(event: &keyboard::Event) -> bool {
             ..
         } if command_pressed(*modifiers) && character.eq_ignore_ascii_case("s")
     )
+}
+
+fn editor_key_binding(
+    key_press: text_editor::KeyPress,
+) -> Option<text_editor::Binding<Message>> {
+    editor_custom_binding(&key_press)
+        .or_else(|| text_editor::Binding::from_key_press(key_press))
+}
+
+fn editor_custom_binding(
+    key_press: &text_editor::KeyPress,
+) -> Option<text_editor::Binding<Message>> {
+    if !matches!(key_press.status, text_editor::Status::Focused { .. }) {
+        return None;
+    }
+
+    match key_press.key.as_ref() {
+        Key::Named(keyboard::key::Named::Tab) if key_press.modifiers.shift() => {
+            Some(text_editor::Binding::Custom(Message::EditorAction(
+                text_editor::Action::Edit(text_editor::Edit::Unindent),
+            )))
+        }
+        Key::Named(keyboard::key::Named::Tab) => Some(text_editor::Binding::Custom(
+            Message::EditorAction(text_editor::Action::Edit(text_editor::Edit::Indent)),
+        )),
+        Key::Character(character)
+            if command_pressed(key_press.modifiers)
+                && key_press.modifiers.shift()
+                && character.eq_ignore_ascii_case("z") =>
+        {
+            Some(text_editor::Binding::Custom(Message::Redo))
+        }
+        Key::Character(character)
+            if command_pressed(key_press.modifiers) && character.eq_ignore_ascii_case("z") =>
+        {
+            Some(text_editor::Binding::Custom(Message::Undo))
+        }
+        _ => None,
+    }
 }
 
 fn is_escape_shortcut(event: &keyboard::Event) -> bool {
@@ -2103,6 +2171,8 @@ mod tests {
         TITLEBAR_INSET_Y,
     };
     use crate::editor::EditorBuffer;
+    use iced::keyboard::{self, Key, Modifiers};
+    use iced::widget::text_editor;
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
@@ -2449,5 +2519,81 @@ mod tests {
         let _ = app.update(super::Message::TogglePreview);
         assert!(!app.preview_open);
         assert!(!app.preview_fullscreen, "hiding preview should exit fullscreen");
+    }
+
+    #[test]
+    fn editor_key_binding_maps_tab_to_indent() {
+        let binding = super::editor_key_binding(key_press(
+            Key::Named(keyboard::key::Named::Tab),
+            Modifiers::default(),
+        ));
+
+        assert!(matches!(
+            binding,
+            Some(text_editor::Binding::Custom(super::Message::EditorAction(
+                text_editor::Action::Edit(text_editor::Edit::Indent)
+            )))
+        ));
+    }
+
+    #[test]
+    fn editor_key_binding_maps_shift_tab_to_unindent() {
+        let binding = super::editor_key_binding(key_press(
+            Key::Named(keyboard::key::Named::Tab),
+            Modifiers::SHIFT,
+        ));
+
+        assert!(matches!(
+            binding,
+            Some(text_editor::Binding::Custom(super::Message::EditorAction(
+                text_editor::Action::Edit(text_editor::Edit::Unindent)
+            )))
+        ));
+    }
+
+    #[test]
+    fn editor_key_binding_maps_ctrl_z_to_undo() {
+        let binding = super::editor_key_binding(key_press(
+            Key::Character("z".into()),
+            Modifiers::CTRL,
+        ));
+
+        assert!(matches!(
+            binding,
+            Some(text_editor::Binding::Custom(super::Message::Undo))
+        ));
+    }
+
+    #[test]
+    fn editor_key_binding_maps_ctrl_shift_z_to_redo() {
+        let binding = super::editor_key_binding(key_press(
+            Key::Character("z".into()),
+            Modifiers::CTRL | Modifiers::SHIFT,
+        ));
+
+        assert!(matches!(
+            binding,
+            Some(text_editor::Binding::Custom(super::Message::Redo))
+        ));
+    }
+
+    fn key_press(key: Key, modifiers: Modifiers) -> text_editor::KeyPress {
+        let modified_key = if modifiers.shift() {
+            match &key {
+                Key::Character(character) => Key::Character(character.to_uppercase().into()),
+                _ => key.clone(),
+            }
+        } else {
+            key.clone()
+        };
+
+        text_editor::KeyPress {
+            key,
+            modified_key,
+            physical_key: keyboard::key::Physical::Code(keyboard::key::Code::KeyZ),
+            modifiers,
+            text: None,
+            status: text_editor::Status::Focused { is_hovered: false },
+        }
     }
 }

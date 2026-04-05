@@ -1161,19 +1161,33 @@ impl App {
         .spacing(10)
         .align_y(Vertical::Center);
 
-        let gutter_scroll = scrollable(gutter.spacing(8))
-            .direction(minimal_scrollbar())
-            .style(minimal_scrollable_style(palette, self.scrollbars_are_visible()))
-            .on_scroll(|_| Message::ScrollActivity(Instant::now()))
-            .height(Fill);
+        // Wrap both gutter and editor in a single scrollable so they scroll together
+        // The text_editor will scroll internally, but we need the parent to scroll too
+        // Use a column-based layout where the editor content determines height
+        let editor_scroll = scrollable(
+            column![
+                row![
+                    container(gutter.spacing(8))
+                        .width(58)
+                        .align_x(Horizontal::Right)
+                        .padding([12, 6]),
+                    container(editor)
+                        .width(Fill)
+                        .padding([12, 16]),
+                ]
+                .height(Length::Shrink),
+            ]
+            .width(Fill),
+        )
+        .direction(minimal_scrollbar())
+        .style(minimal_scrollable_style(palette, self.scrollbars_are_visible()))
+        .on_scroll(|_| Message::ScrollActivity(Instant::now()))
+        .width(Fill)
+        .height(Fill);
 
         let editor_body = container(
             column![
-                row![
-                    container(gutter_scroll).width(58).padding([12, 6]),
-                    container(editor).width(Fill).height(Fill).padding([12, 16]),
-                ]
-                .height(Fill),
+                editor_scroll,
                 separator(palette.divider),
                 container(status).padding([8, 16])
             ]

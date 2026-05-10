@@ -17,6 +17,7 @@ use iced::{
     Background, Border, Color, Element, Fill, Font, Length, Shadow, Subscription, Task, Theme,
     Vector, window,
 };
+use notify::Event;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -52,6 +53,7 @@ enum Message {
     OpenAboutRepo,
     ScrollActivity(Instant),
     PollWatcher,
+    RefreshMarkdownPreview,
     UiPulse,
     MenuHoverChanged(HoverRegion, bool),
     CloseMenuIfUnhovered,
@@ -103,12 +105,20 @@ enum ModalState {
     About,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingWatcherRefresh {
+    due_at: Instant,
+    active_file_touched: bool,
+}
+
 struct App {
     editor: EditorBuffer,
     tree: Option<FileNode>,
     workspace_root: Option<PathBuf>,
     watcher: Option<WorkspaceWatcher>,
     markdown_items: Vec<iced::widget::markdown::Item>,
+    markdown_refresh_at: Option<Instant>,
+    pending_watcher_refresh: Option<PendingWatcherRefresh>,
     preview_open: bool,
     preview_fullscreen: bool,
     theme_mode: ThemeMode,
@@ -148,6 +158,8 @@ impl App {
             workspace_root: None,
             watcher: None,
             markdown_items: Vec::new(),
+            markdown_refresh_at: None,
+            pending_watcher_refresh: None,
             preview_open: true,
             preview_fullscreen: false,
             theme_mode: ThemeMode::Light,
@@ -185,6 +197,13 @@ impl App {
         if self.watcher.is_some() {
             subscriptions
                 .push(iced::time::every(Duration::from_millis(700)).map(|_| Message::PollWatcher));
+        }
+
+        if self.markdown_refresh_at.is_some() {
+            subscriptions.push(
+                iced::time::every(Duration::from_millis(60))
+                    .map(|_| Message::RefreshMarkdownPreview),
+            );
         }
 
         if self.scrollbars_are_visible() {
@@ -231,7 +250,7 @@ impl App {
             }
             Message::Undo => {
                 if self.editor.undo() {
-                    self.refresh_markdown();
+                    self.request_markdown_refresh();
                     self.status = "Undid last edit.".to_string();
                 } else {
                     self.status = "Nothing to undo.".to_string();
@@ -241,7 +260,7 @@ impl App {
             }
             Message::Redo => {
                 if self.editor.redo() {
-                    self.refresh_markdown();
+                    self.request_markdown_refresh();
                     self.status = "Redid last edit.".to_string();
                 } else {
                     self.status = "Nothing to redo.".to_string();
@@ -254,6 +273,10 @@ impl App {
                 self.preview_open = !self.preview_open;
                 if !self.preview_open {
                     self.preview_fullscreen = false;
+                    self.markdown_items.clear();
+                    self.markdown_refresh_at = None;
+                } else {
+                    self.refresh_markdown();
                 }
                 self.status = if self.preview_open {
                     "Markdown preview enabled.".to_string()
@@ -267,6 +290,7 @@ impl App {
                 self.preview_fullscreen = !self.preview_fullscreen;
                 if self.preview_fullscreen {
                     self.preview_open = true;
+                    self.refresh_markdown();
                 }
                 self.status = if self.preview_fullscreen {
                     "Preview expanded to full width.".to_string()
@@ -358,7 +382,7 @@ impl App {
                 self.editor.apply_action(action);
 
                 if should_refresh_markdown {
-                    self.refresh_markdown();
+                    self.request_markdown_refresh();
                 }
 
                 Task::none()
@@ -400,6 +424,10 @@ impl App {
             }
             Message::PollWatcher => {
                 self.poll_watcher();
+                Task::none()
+            }
+            Message::RefreshMarkdownPreview => {
+                self.refresh_markdown_if_due(Instant::now());
                 Task::none()
             }
             Message::UiPulse => {
@@ -463,10 +491,10 @@ impl App {
         let mut content_row = row![].spacing(content_section_gap()).height(Fill);
         let show_preview = self.preview_open && is_markdown_file(self.editor.path());
 
-        if !self.preview_fullscreen {
-            if let Some(tree) = &self.tree {
-                content_row = content_row.push(self.sidebar_view(tree));
-            }
+        if !self.preview_fullscreen
+            && let Some(tree) = &self.tree
+        {
+            content_row = content_row.push(self.sidebar_view(tree));
         }
 
         if !self.preview_fullscreen {
@@ -835,6 +863,7 @@ impl App {
                     self.tree = None;
                     self.workspace_root = None;
                     self.watcher = WorkspaceWatcher::watch(&path).ok();
+                    self.pending_watcher_refresh = None;
                 }
 
                 self.refresh_markdown();
@@ -851,6 +880,7 @@ impl App {
                 self.tree = Some(tree);
                 self.workspace_root = Some(path.clone());
                 self.watcher = WorkspaceWatcher::watch(&path).ok();
+                self.pending_watcher_refresh = None;
                 self.status = format!("Workspace loaded: {}", path.display());
             }
             Err(error) => {
@@ -878,10 +908,10 @@ impl App {
 
     fn handle_tree_press(&mut self, path: PathBuf) {
         if path.is_dir() {
-            if let Some(tree) = &mut self.tree {
-                if let Err(error) = expand_directory(tree, &path) {
-                    self.status = format!("Failed to expand {}: {error}", path.display());
-                }
+            if let Some(tree) = &mut self.tree
+                && let Err(error) = expand_directory(tree, &path)
+            {
+                self.status = format!("Failed to expand {}: {error}", path.display());
             }
 
             return;
@@ -921,43 +951,106 @@ impl App {
         };
 
         let events = watcher.drain();
+        let now = Instant::now();
 
-        if events.is_empty() {
+        self.record_watcher_events_at(events, now);
+        self.refresh_watched_files_if_due(now);
+    }
+
+    fn record_watcher_events_at(
+        &mut self,
+        events: Vec<Result<Event, notify::Error>>,
+        now: Instant,
+    ) {
+        let active_file = self.editor.path().map(Path::to_path_buf);
+        let mut has_relevant_event = false;
+        let mut active_file_touched = false;
+
+        for event in events
+            .iter()
+            .filter_map(|result| result.as_ref().ok())
+            .filter(|event| watcher_event_is_relevant(event))
+        {
+            has_relevant_event = true;
+
+            if event.need_rescan()
+                || active_file
+                    .as_ref()
+                    .is_some_and(|path| event.paths.iter().any(|event_path| event_path == path))
+            {
+                active_file_touched = true;
+            }
+        }
+
+        if !has_relevant_event {
             return;
         }
+
+        let already_touched = self
+            .pending_watcher_refresh
+            .is_some_and(|pending| pending.active_file_touched);
+
+        self.pending_watcher_refresh = Some(PendingWatcherRefresh {
+            due_at: now + watcher_refresh_delay(),
+            active_file_touched: already_touched || active_file_touched,
+        });
+    }
+
+    fn refresh_watched_files_if_due(&mut self, now: Instant) {
+        let Some(pending) = self.pending_watcher_refresh else {
+            return;
+        };
+
+        if pending.due_at > now {
+            return;
+        }
+
+        self.pending_watcher_refresh = None;
 
         if let Some(tree) = &mut self.tree {
             let _ = refresh_tree(tree);
         }
 
-        if let Some(active_file) = self.editor.path().map(Path::to_path_buf) {
-            let touched_active_file = events.iter().flatten().any(|event| {
-                event
-                    .paths
-                    .iter()
-                    .any(|event_path| event_path == &active_file)
-            });
+        if pending.active_file_touched
+            && let Some(active_file) = self.editor.path().map(Path::to_path_buf)
+            && !self.editor.is_dirty()
+            && let Ok(contents) = read_text_file(&active_file)
+            && contents != self.editor.text()
+        {
+            self.editor
+                .reload_from_disk(Some(active_file.clone()), contents);
+            self.refresh_markdown();
+            self.status = format!("Reloaded {} after external change.", active_file.display());
+        }
+    }
 
-            if touched_active_file && !self.editor.is_dirty() {
-                if let Ok(contents) = read_text_file(&active_file) {
-                    if contents != self.editor.text() {
-                        self.editor
-                            .reload_from_disk(Some(active_file.clone()), contents);
-                        self.refresh_markdown();
-                        self.status =
-                            format!("Reloaded {} after external change.", active_file.display());
-                    }
-                }
-            }
+    fn request_markdown_refresh(&mut self) {
+        if self.should_render_markdown() {
+            self.markdown_refresh_at = Some(Instant::now() + markdown_refresh_delay());
+        } else {
+            self.markdown_refresh_at = None;
+            self.markdown_items.clear();
+        }
+    }
+
+    fn refresh_markdown_if_due(&mut self, now: Instant) {
+        if self.markdown_refresh_at.is_some_and(|due_at| due_at <= now) {
+            self.refresh_markdown();
         }
     }
 
     fn refresh_markdown(&mut self) {
-        if is_markdown_file(self.editor.path()) {
+        self.markdown_refresh_at = None;
+
+        if self.should_render_markdown() {
             self.markdown_items = parse_items(&self.editor.text());
         } else {
             self.markdown_items.clear();
         }
+    }
+
+    fn should_render_markdown(&self) -> bool {
+        self.preview_open && is_markdown_file(self.editor.path())
     }
 
     fn sidebar_view(&self, tree: &FileNode) -> Element<'_, Message> {
@@ -1441,16 +1534,16 @@ fn breadcrumb_path(workspace_root: Option<&Path>, active_path: Option<&Path>) ->
         return "Untitled".to_string();
     };
 
-    if let Some(root) = workspace_root {
-        if let Ok(relative_path) = active_path.strip_prefix(root) {
-            let segments = relative_path
-                .iter()
-                .map(|segment| segment.to_string_lossy().to_string())
-                .collect::<Vec<_>>();
+    if let Some(root) = workspace_root
+        && let Ok(relative_path) = active_path.strip_prefix(root)
+    {
+        let segments = relative_path
+            .iter()
+            .map(|segment| segment.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
 
-            if !segments.is_empty() {
-                return segments.join(" / ");
-            }
+        if !segments.is_empty() {
+            return segments.join(" / ");
         }
     }
 
@@ -2145,6 +2238,18 @@ fn menu_close_delay() -> Duration {
     Duration::from_millis(140)
 }
 
+fn markdown_refresh_delay() -> Duration {
+    Duration::from_millis(180)
+}
+
+fn watcher_refresh_delay() -> Duration {
+    Duration::from_millis(350)
+}
+
+fn watcher_event_is_relevant(event: &Event) -> bool {
+    event.need_rescan() || !event.kind.is_access()
+}
+
 fn tree_indent(depth: usize) -> f32 {
     let depth = depth.min(7) as f32;
     depth * 12.0
@@ -2239,6 +2344,10 @@ mod tests {
     use crate::editor::EditorBuffer;
     use iced::keyboard::{self, Key, Modifiers};
     use iced::widget::text_editor;
+    use notify::{
+        Event, EventKind,
+        event::{AccessKind, AccessMode, DataChange, ModifyKind},
+    };
     use std::path::{Path, PathBuf};
     use std::time::Instant;
 
@@ -2649,6 +2758,76 @@ mod tests {
         )));
 
         assert!(app.markdown_items.is_empty());
+    }
+
+    #[test]
+    fn markdown_edits_are_debounced_until_deadline() {
+        let (mut app, _) = super::App::new(None);
+        app.editor
+            .set_from_disk(Some(PathBuf::from("notes.md")), "# Title".to_string());
+        app.markdown_items.clear();
+
+        let _ = app.update(super::Message::EditorAction(text_editor::Action::Edit(
+            text_editor::Edit::Insert('!'),
+        )));
+
+        assert!(app.markdown_items.is_empty());
+        assert!(app.markdown_refresh_at.is_some());
+    }
+
+    #[test]
+    fn markdown_refresh_runs_after_debounce_deadline() {
+        let (mut app, _) = super::App::new(None);
+        app.editor
+            .set_from_disk(Some(PathBuf::from("notes.md")), "# Title".to_string());
+        app.markdown_items.clear();
+        let due_at = Instant::now() - super::markdown_refresh_delay();
+        app.markdown_refresh_at = Some(due_at);
+
+        let _ = app.update(super::Message::RefreshMarkdownPreview);
+
+        assert!(!app.markdown_items.is_empty());
+        assert_eq!(app.markdown_refresh_at, None);
+    }
+
+    #[test]
+    fn hidden_preview_edits_do_not_schedule_markdown_refresh() {
+        let (mut app, _) = super::App::new(None);
+        app.preview_open = false;
+        app.editor
+            .set_from_disk(Some(PathBuf::from("notes.md")), "# Title".to_string());
+
+        let _ = app.update(super::Message::EditorAction(text_editor::Action::Edit(
+            text_editor::Edit::Insert('!'),
+        )));
+
+        assert!(app.markdown_items.is_empty());
+        assert_eq!(app.markdown_refresh_at, None);
+    }
+
+    #[test]
+    fn watcher_access_events_are_ignored() {
+        let event = Event::new(EventKind::Access(AccessKind::Open(AccessMode::Read)))
+            .add_path(PathBuf::from("notes.md"));
+
+        assert!(!super::watcher_event_is_relevant(&event));
+    }
+
+    #[test]
+    fn watcher_core_events_are_debounced() {
+        let (mut app, _) = super::App::new(None);
+        let now = Instant::now();
+        let event = Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+            .add_path(PathBuf::from("notes.md"));
+
+        app.record_watcher_events_at(vec![Ok(event.clone())], now);
+        let first_due_at = app.pending_watcher_refresh.expect("pending").due_at;
+
+        app.record_watcher_events_at(vec![Ok(event)], now + super::watcher_refresh_delay() / 2);
+        let second_due_at = app.pending_watcher_refresh.expect("pending").due_at;
+
+        assert_eq!(first_due_at, now + super::watcher_refresh_delay());
+        assert!(second_due_at > first_due_at);
     }
 
     #[test]

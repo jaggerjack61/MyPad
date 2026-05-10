@@ -28,7 +28,7 @@ pub fn register(exe_path: &Path) -> Result<(), String> {
         .create(FILE_COMMAND_KEY)
         .map_err(|e| format!("Failed to create file command key: {e}"))?;
     file_cmd
-        .set_string("", &format!("\"{exe}\" \"%1\""))
+        .set_string("", format!("\"{exe}\" \"%1\""))
         .map_err(|e| format!("Failed to set file command value: {e}"))?;
 
     let dir_shell = CURRENT_USER
@@ -45,7 +45,7 @@ pub fn register(exe_path: &Path) -> Result<(), String> {
         .create(DIR_COMMAND_KEY)
         .map_err(|e| format!("Failed to create directory command key: {e}"))?;
     dir_cmd
-        .set_string("", &format!("\"{exe}\" \"%V\""))
+        .set_string("", format!("\"{exe}\" \"%V\""))
         .map_err(|e| format!("Failed to set directory command value: {e}"))?;
 
     Ok(())

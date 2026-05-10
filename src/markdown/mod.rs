@@ -13,7 +13,7 @@ pub fn render_html(input: &str) -> String {
     options.insert(Options::ENABLE_TASKLISTS);
 
     let parser = Parser::new_ext(input, options);
-    let mut output = String::new();
+    let mut output = String::with_capacity(input.len().saturating_mul(3) / 2);
     html::push_html(&mut output, parser);
     output
 }

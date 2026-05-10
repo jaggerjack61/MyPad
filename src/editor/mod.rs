@@ -1,6 +1,8 @@
 use iced::widget::text_editor;
 use std::path::{Path, PathBuf};
 
+const MAX_HISTORY_ENTRIES: usize = 200;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CursorLocation {
     pub line: usize,
@@ -12,6 +14,8 @@ pub struct EditorBuffer {
     path: Option<PathBuf>,
     content: text_editor::Content,
     saved_text: String,
+    dirty: bool,
+    line_numbers: Vec<String>,
     cursor: CursorLocation,
     undo_stack: Vec<EditorSnapshot>,
     redo_stack: Vec<EditorSnapshot>,
@@ -27,11 +31,14 @@ impl EditorBuffer {
     pub fn new(path: Option<PathBuf>, text: impl Into<String>) -> Self {
         let text = text.into();
         let content = text_editor::Content::with_text(&text);
+        let line_numbers = line_numbers_for_count(content.line_count());
 
         let mut buffer = Self {
             path,
             content,
             saved_text: text,
+            dirty: false,
+            line_numbers,
             cursor: CursorLocation { line: 1, column: 1 },
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -69,15 +76,19 @@ impl EditorBuffer {
     }
 
     pub fn replace_text(&mut self, text: String, cursor: CursorLocation) {
+        self.dirty = text != self.saved_text;
         self.content = text_editor::Content::with_text(&text);
+        self.refresh_line_numbers();
         self.set_cursor(cursor);
         self.clear_history();
     }
 
     pub fn set_from_disk(&mut self, path: Option<PathBuf>, text: String) {
         self.path = path;
+        self.saved_text = text.clone();
+        self.dirty = false;
         self.content = text_editor::Content::with_text(&text);
-        self.saved_text = self.content.text();
+        self.refresh_line_numbers();
         self.sync_cursor();
         self.clear_history();
     }
@@ -86,8 +97,10 @@ impl EditorBuffer {
         let cursor = self.cursor;
 
         self.path = path;
+        self.saved_text = text.clone();
+        self.dirty = false;
         self.content = text_editor::Content::with_text(&text);
-        self.saved_text = self.content.text();
+        self.refresh_line_numbers();
         self.set_cursor(cursor);
         self.clear_history();
     }
@@ -99,11 +112,13 @@ impl EditorBuffer {
         self.sync_cursor();
 
         if let Some(snapshot) = prior_snapshot {
-            let current = self.snapshot();
+            let current_text = self.content.text();
 
-            if current != snapshot {
-                self.undo_stack.push(snapshot);
+            if current_text != snapshot.text {
+                self.push_undo(snapshot);
                 self.redo_stack.clear();
+                self.dirty = current_text != self.saved_text;
+                self.refresh_line_numbers();
             }
         }
     }
@@ -112,18 +127,17 @@ impl EditorBuffer {
         self.cursor
     }
 
-    pub fn line_numbers(&self) -> Vec<String> {
-        (1..=self.content.line_count().max(1))
-            .map(|line| line.to_string())
-            .collect()
+    pub fn line_numbers(&self) -> &[String] {
+        &self.line_numbers
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.content.text() != self.saved_text
+        self.dirty
     }
 
     pub fn mark_saved(&mut self) {
         self.saved_text = self.content.text();
+        self.dirty = false;
     }
 
     pub fn undo(&mut self) -> bool {
@@ -133,7 +147,7 @@ impl EditorBuffer {
 
         let current = self.snapshot();
         self.restore_snapshot(snapshot);
-        self.redo_stack.push(current);
+        self.push_redo(current);
         true
     }
 
@@ -144,7 +158,7 @@ impl EditorBuffer {
 
         let current = self.snapshot();
         self.restore_snapshot(snapshot);
-        self.undo_stack.push(current);
+        self.push_undo(current);
         true
     }
 
@@ -162,12 +176,30 @@ impl EditorBuffer {
 
     fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
         self.content = text_editor::Content::with_text(&snapshot.text);
+        self.dirty = snapshot.text != self.saved_text;
+        self.refresh_line_numbers();
         self.set_cursor(snapshot.cursor);
+    }
+
+    fn push_undo(&mut self, snapshot: EditorSnapshot) {
+        push_bounded(&mut self.undo_stack, snapshot);
+    }
+
+    fn push_redo(&mut self, snapshot: EditorSnapshot) {
+        push_bounded(&mut self.redo_stack, snapshot);
     }
 
     fn clear_history(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
+    }
+
+    fn refresh_line_numbers(&mut self) {
+        let line_count = self.content.line_count();
+
+        if self.line_numbers.len() != line_count.max(1) {
+            self.line_numbers = line_numbers_for_count(line_count);
+        }
     }
 
     fn sync_cursor(&mut self) {
@@ -178,6 +210,20 @@ impl EditorBuffer {
             column: position.column.saturating_add(1),
         };
     }
+}
+
+fn push_bounded(stack: &mut Vec<EditorSnapshot>, snapshot: EditorSnapshot) {
+    stack.push(snapshot);
+
+    if stack.len() > MAX_HISTORY_ENTRIES {
+        stack.remove(0);
+    }
+}
+
+fn line_numbers_for_count(line_count: usize) -> Vec<String> {
+    (1..=line_count.max(1))
+        .map(|line| line.to_string())
+        .collect()
 }
 
 fn clamp_cursor(content: &text_editor::Content, cursor: CursorLocation) -> text_editor::Cursor {
@@ -320,5 +366,21 @@ mod tests {
 
         assert!(!buffer.redo());
         assert_eq!(buffer.text(), "ac");
+    }
+
+    #[test]
+    fn undo_history_limits_old_snapshots() {
+        let mut buffer = EditorBuffer::new(None, String::new());
+
+        for _ in 0..205 {
+            buffer.apply_action(text_editor::Action::Edit(text_editor::Edit::Insert('x')));
+        }
+
+        let mut undo_count = 0;
+        while buffer.undo() {
+            undo_count += 1;
+        }
+
+        assert_eq!(undo_count, 200);
     }
 }

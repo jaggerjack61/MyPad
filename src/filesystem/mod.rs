@@ -1,4 +1,5 @@
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -112,12 +113,15 @@ pub fn refresh_tree(tree: &mut FileNode) -> io::Result<()> {
         }
 
         let refreshed_children = load_children(&tree.path)?;
-        let old_children = std::mem::take(children);
+        let mut old_children_by_path = std::mem::take(children)
+            .into_iter()
+            .map(|node| (node.path.clone(), node))
+            .collect::<HashMap<_, _>>();
         let mut merged = Vec::with_capacity(refreshed_children.len());
 
         for mut refreshed in refreshed_children {
-            if let Some(existing) = old_children.iter().find(|node| node.path == refreshed.path) {
-                if let (
+            if let Some(existing) = old_children_by_path.remove(&refreshed.path)
+                && let (
                     NodeKind::Directory {
                         expanded: old_expanded,
                         loaded: old_loaded,
@@ -128,15 +132,14 @@ pub fn refresh_tree(tree: &mut FileNode) -> io::Result<()> {
                         loaded: new_loaded,
                         children: new_children,
                     },
-                ) = (&existing.kind, &mut refreshed.kind)
-                {
-                    *new_expanded = *old_expanded;
-                    *new_loaded = *old_loaded;
-                    *new_children = old_children.clone();
+                ) = (existing.kind, &mut refreshed.kind)
+            {
+                *new_expanded = old_expanded;
+                *new_loaded = old_loaded;
+                *new_children = old_children;
 
-                    if *new_loaded {
-                        refresh_tree(&mut refreshed)?;
-                    }
+                if *new_loaded {
+                    refresh_tree(&mut refreshed)?;
                 }
             }
 
@@ -176,6 +179,7 @@ impl WorkspaceWatcher {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{NodeKind, build_tree, expand_directory, visible_nodes};
     use std::fs;

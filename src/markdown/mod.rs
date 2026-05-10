@@ -1,5 +1,5 @@
 use iced::widget::markdown;
-use pulldown_cmark::{html, Options, Parser};
+use pulldown_cmark::{Options, Parser, html};
 
 pub fn parse_items(input: &str) -> Vec<markdown::Item> {
     markdown::parse(input).collect()
@@ -19,7 +19,9 @@ pub fn render_html(input: &str) -> String {
 }
 
 pub fn is_markdown_file(path: Option<&std::path::Path>) -> bool {
-    path.and_then(|value| value.extension()).and_then(|ext| ext.to_str()) == Some("md")
+    path.and_then(|value| value.extension())
+        .and_then(|ext| ext.to_str())
+        == Some("md")
 }
 
 #[cfg(test)]

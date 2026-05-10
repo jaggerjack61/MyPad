@@ -1,5 +1,5 @@
-use image::imageops::FilterType;
 use ico::{IconDir, IconDirEntry, IconImage, ResourceType};
+use image::imageops::FilterType;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -26,8 +26,7 @@ fn generate_ico(png_path: &Path, ico_path: &Path) {
     for &size in ICON_SIZES {
         let resized = source.resize_exact(size, size, FilterType::Lanczos3);
         let rgba = resized.to_rgba8();
-        let icon_image =
-            IconImage::from_rgba_data(size, size, rgba.into_raw());
+        let icon_image = IconImage::from_rgba_data(size, size, rgba.into_raw());
         icon_dir.add_entry(IconDirEntry::encode(&icon_image).expect("failed to encode icon entry"));
     }
 

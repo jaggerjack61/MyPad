@@ -1,5 +1,5 @@
-use std::sync::LazyLock;
 use std::path::Path;
+use std::sync::LazyLock;
 use syntect::parsing::SyntaxSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,18 +1,21 @@
 use crate::context_menu;
 use crate::editor::EditorBuffer;
 use crate::filesystem::{
-    build_tree, expand_directory, read_text_file, refresh_tree, save_text_file, supported_file,
-    visible_nodes, FileNode, WorkspaceWatcher, SUPPORTED_FILE_EXTENSIONS,
+    FileNode, SUPPORTED_FILE_EXTENSIONS, WorkspaceWatcher, build_tree, expand_directory,
+    read_text_file, refresh_tree, save_text_file, supported_file, visible_nodes,
 };
 use crate::markdown::{is_markdown_file, parse_items};
 use crate::syntax;
 use iced::alignment::{Horizontal, Vertical};
 use iced::highlighter;
 use iced::keyboard::{self, Key, Modifiers};
-use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, stack, text, text_editor, tooltip, Space};
+use iced::widget::{
+    Space, button, column, container, mouse_area, opaque, row, scrollable, stack, text,
+    text_editor, tooltip,
+};
 use iced::{
-    window, Background, Border, Color, Element, Fill, Font, Length, Shadow, Subscription, Task,
-    Theme, Vector,
+    Background, Border, Color, Element, Fill, Font, Length, Shadow, Subscription, Task, Theme,
+    Vector, window,
 };
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -120,21 +123,21 @@ struct App {
 }
 
 pub fn run(initial_path: Option<PathBuf>) -> iced::Result {
-    let icon = window::icon::from_file_data(
-        include_bytes!("../../icon.png"),
-        None,
-    )
-    .ok();
+    let icon = window::icon::from_file_data(include_bytes!("../../icon.png"), None).ok();
 
-    iced::application(move || App::new(initial_path.clone()), App::update, App::view)
-        .theme(App::theme)
-        .subscription(App::subscription)
-        .window(window::Settings {
-            icon,
-            decorations: false,
-            ..Default::default()
-        })
-        .run()
+    iced::application(
+        move || App::new(initial_path.clone()),
+        App::update,
+        App::view,
+    )
+    .theme(App::theme)
+    .subscription(App::subscription)
+    .window(window::Settings {
+        icon,
+        decorations: false,
+        ..Default::default()
+    })
+    .run()
 }
 
 impl App {
@@ -180,9 +183,8 @@ impl App {
         let mut subscriptions = vec![keyboard::listen().map(Message::KeyboardEvent)];
 
         if self.watcher.is_some() {
-            subscriptions.push(
-                iced::time::every(Duration::from_millis(700)).map(|_| Message::PollWatcher),
-            );
+            subscriptions
+                .push(iced::time::every(Duration::from_millis(700)).map(|_| Message::PollWatcher));
         }
 
         if self.scrollbars_are_visible() {
@@ -298,7 +300,9 @@ impl App {
                         }
                     }
                 } else {
-                    match context_menu::current_exe_path().and_then(|exe| context_menu::register(&exe)) {
+                    match context_menu::current_exe_path()
+                        .and_then(|exe| context_menu::register(&exe))
+                    {
                         Ok(()) => {
                             self.context_menu_registered = true;
                             self.status = "Added MyPad to the context menu.".to_string();
@@ -349,8 +353,14 @@ impl App {
                 window::latest().and_then(window::close)
             }
             Message::EditorAction(action) => {
+                let should_refresh_markdown = action.is_edit();
+
                 self.editor.apply_action(action);
-                self.refresh_markdown();
+
+                if should_refresh_markdown {
+                    self.refresh_markdown();
+                }
+
                 Task::none()
             }
             Message::TreePressed(path) => {
@@ -488,13 +498,10 @@ impl App {
         };
 
         if let Some(modal) = &self.modal {
-            stack([
-                layered,
-                opaque(self.modal_overlay(modal, palette)),
-            ])
-            .width(Fill)
-            .height(Fill)
-            .into()
+            stack([layered, opaque(self.modal_overlay(modal, palette))])
+                .width(Fill)
+                .height(Fill)
+                .into()
         } else {
             layered
         }
@@ -638,10 +645,7 @@ impl App {
             .on_enter(Message::MenuHoverChanged(HoverRegion::Overlay, true))
             .on_exit(Message::MenuHoverChanged(HoverRegion::Overlay, false));
 
-        container(tracked)
-            .width(Fill)
-            .height(Fill)
-            .into()
+        container(tracked).width(Fill).height(Fill).into()
     }
 
     fn titlebar_view(&self, palette: Palette) -> Element<'_, Message> {
@@ -666,9 +670,21 @@ impl App {
         .width(BRAND_BLOCK_WIDTH);
 
         let menus = row![
-            menu_button(palette, MenuKind::File, self.open_menu == Some(MenuKind::File)),
-            menu_button(palette, MenuKind::View, self.open_menu == Some(MenuKind::View)),
-            menu_button(palette, MenuKind::Help, self.open_menu == Some(MenuKind::Help)),
+            menu_button(
+                palette,
+                MenuKind::File,
+                self.open_menu == Some(MenuKind::File)
+            ),
+            menu_button(
+                palette,
+                MenuKind::View,
+                self.open_menu == Some(MenuKind::View)
+            ),
+            menu_button(
+                palette,
+                MenuKind::Help,
+                self.open_menu == Some(MenuKind::Help)
+            ),
         ]
         .spacing(MENU_GAP)
         .width(Length::Shrink);
@@ -708,9 +724,13 @@ impl App {
         .align_y(Vertical::Center);
 
         container(
-            row![row![brand, menus].spacing(12).align_y(Vertical::Center), title, controls]
-                .align_y(Vertical::Center)
-                .spacing(10),
+            row![
+                row![brand, menus].spacing(12).align_y(Vertical::Center),
+                title,
+                controls
+            ]
+            .align_y(Vertical::Center)
+            .spacing(10),
         )
         .padding([TITLEBAR_INSET_Y, TITLEBAR_INSET_X])
         .style(titlebar_style(palette))
@@ -868,9 +888,12 @@ impl App {
         }
 
         let now = Instant::now();
-        let should_open = self.last_tree_click.as_ref().is_some_and(|(last_path, last_at)| {
-            *last_path == path && now.duration_since(*last_at) <= Duration::from_millis(350)
-        });
+        let should_open = self
+            .last_tree_click
+            .as_ref()
+            .is_some_and(|(last_path, last_at)| {
+                *last_path == path && now.duration_since(*last_at) <= Duration::from_millis(350)
+            });
 
         self.last_tree_click = Some((path.clone(), now));
 
@@ -878,7 +901,8 @@ impl App {
             if supported_file(&path) {
                 self.open_file(path);
             } else {
-                let name = path.file_name()
+                let name = path
+                    .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
                 self.modal = Some(ModalState::UnsupportedFile {
@@ -907,20 +931,21 @@ impl App {
         }
 
         if let Some(active_file) = self.editor.path().map(Path::to_path_buf) {
-            let touched_active_file = events
-                .iter()
-                .flatten()
-                .any(|event| event.paths.iter().any(|event_path| event_path == &active_file));
+            let touched_active_file = events.iter().flatten().any(|event| {
+                event
+                    .paths
+                    .iter()
+                    .any(|event_path| event_path == &active_file)
+            });
 
             if touched_active_file && !self.editor.is_dirty() {
                 if let Ok(contents) = read_text_file(&active_file) {
                     if contents != self.editor.text() {
-                        self.editor.reload_from_disk(Some(active_file.clone()), contents);
+                        self.editor
+                            .reload_from_disk(Some(active_file.clone()), contents);
                         self.refresh_markdown();
-                        self.status = format!(
-                            "Reloaded {} after external change.",
-                            active_file.display()
-                        );
+                        self.status =
+                            format!("Reloaded {} after external change.", active_file.display());
                     }
                 }
             }
@@ -964,7 +989,13 @@ impl App {
                     ]
                     .spacing(2)
                     .width(Fill),
-                    icon_button(palette, "\u{1F4C2}", Message::OpenFolder, true, "Open folder"),
+                    icon_button(
+                        palette,
+                        "\u{1F4C2}",
+                        Message::OpenFolder,
+                        true,
+                        "Open folder"
+                    ),
                 ]
                 .align_y(Vertical::Center)
                 .spacing(8),
@@ -978,7 +1009,10 @@ impl App {
         let mut nodes = column![].spacing(4);
 
         for node in visible.iter() {
-            let is_active = self.editor.path().is_some_and(|path| path == node.path.as_path());
+            let is_active = self
+                .editor
+                .path()
+                .is_some_and(|path| path == node.path.as_path());
             let prefix = if node.is_dir {
                 if node.expanded {
                     "\u{25BE}"
@@ -1001,7 +1035,11 @@ impl App {
                             Color::TRANSPARENT
                         }),
                     text(node.name.clone())
-                        .font(if node.is_dir { Self::body_font() } else { Self::mono_font() })
+                        .font(if node.is_dir {
+                            Self::body_font()
+                        } else {
+                            Self::mono_font()
+                        })
                         .size(13)
                         .color(if is_active {
                             palette.accent_text
@@ -1020,12 +1058,16 @@ impl App {
             .style(tree_button_style(palette, is_active))
             .on_press(Message::TreePressed(node.path.clone()));
 
-            nodes = nodes.push(row![Space::new().width(tree_indent(node.depth)), button].width(Fill));
+            nodes =
+                nodes.push(row![Space::new().width(tree_indent(node.depth)), button].width(Fill));
         }
 
         let sidebar_scroll = scrollable(nodes.spacing(6))
             .direction(minimal_scrollbar())
-            .style(minimal_scrollable_style(palette, self.scrollbars_are_visible()))
+            .style(minimal_scrollable_style(
+                palette,
+                self.scrollbars_are_visible(),
+            ))
             .on_scroll(|_| Message::ScrollActivity(Instant::now()))
             .width(Fill)
             .height(Fill);
@@ -1083,7 +1125,11 @@ impl App {
                     info_pill(palette, syntax_profile.extension.to_uppercase(), false),
                     info_pill(
                         palette,
-                        if self.editor.is_dirty() { "\u{25CF}" } else { "\u{2713}" },
+                        if self.editor.is_dirty() {
+                            "\u{25CF}"
+                        } else {
+                            "\u{2713}"
+                        },
                         self.editor.is_dirty(),
                     ),
                 ]
@@ -1136,14 +1182,18 @@ impl App {
                 .font(Self::mono_font())
                 .size(11)
                 .color(palette.text_soft),
-            text(if self.editor.is_dirty() { "\u{25CF}" } else { "\u{25CB}" })
-                .font(Self::body_font())
-                .size(10)
-                .color(if self.editor.is_dirty() {
-                    palette.warning
-                } else {
-                    palette.text_soft
-                }),
+            text(if self.editor.is_dirty() {
+                "\u{25CF}"
+            } else {
+                "\u{25CB}"
+            })
+            .font(Self::body_font())
+            .size(10)
+            .color(if self.editor.is_dirty() {
+                palette.warning
+            } else {
+                palette.text_soft
+            }),
             text(self.status.clone())
                 .font(Self::body_font())
                 .size(11)
@@ -1171,16 +1221,17 @@ impl App {
                         .width(58)
                         .align_x(Horizontal::Right)
                         .padding([12, 6]),
-                    container(editor)
-                        .width(Fill)
-                        .padding([12, 16]),
+                    container(editor).width(Fill).padding([12, 16]),
                 ]
                 .height(Length::Shrink),
             ]
             .width(Fill),
         )
         .direction(minimal_scrollbar())
-        .style(minimal_scrollable_style(palette, self.scrollbars_are_visible()))
+        .style(minimal_scrollable_style(
+            palette,
+            self.scrollbars_are_visible(),
+        ))
         .on_scroll(|_| Message::ScrollActivity(Instant::now()))
         .width(Fill)
         .height(Fill);
@@ -1252,7 +1303,10 @@ impl App {
 
         let preview_scroll = scrollable(container(preview).padding([8, 2]).width(Fill))
             .direction(minimal_scrollbar())
-            .style(minimal_scrollable_style(palette, self.scrollbars_are_visible()))
+            .style(minimal_scrollable_style(
+                palette,
+                self.scrollbars_are_visible(),
+            ))
             .on_scroll(|_| Message::ScrollActivity(Instant::now()))
             .width(Fill)
             .height(Fill);
@@ -1265,7 +1319,11 @@ impl App {
 
         column![preview_header, preview_body]
             .spacing(content_section_gap())
-            .width(if self.preview_fullscreen { Length::Fill } else { Length::Fixed(PREVIEW_WIDTH) })
+            .width(if self.preview_fullscreen {
+                Length::Fill
+            } else {
+                Length::Fixed(PREVIEW_WIDTH)
+            })
             .height(Fill)
             .into()
     }
@@ -1413,11 +1471,8 @@ fn is_save_shortcut(event: &keyboard::Event) -> bool {
     )
 }
 
-fn editor_key_binding(
-    key_press: text_editor::KeyPress,
-) -> Option<text_editor::Binding<Message>> {
-    editor_custom_binding(&key_press)
-        .or_else(|| text_editor::Binding::from_key_press(key_press))
+fn editor_key_binding(key_press: text_editor::KeyPress) -> Option<text_editor::Binding<Message>> {
+    editor_custom_binding(&key_press).or_else(|| text_editor::Binding::from_key_press(key_press))
 }
 
 fn editor_custom_binding(
@@ -1779,10 +1834,7 @@ fn menu_item_button(
     .on_press(message)
 }
 
-fn theme_toggle_button(
-    palette: Palette,
-    theme_mode: ThemeMode,
-) -> Element<'static, Message> {
+fn theme_toggle_button(palette: Palette, theme_mode: ThemeMode) -> Element<'static, Message> {
     icon_button(
         palette,
         match theme_mode {
@@ -1824,7 +1876,10 @@ fn icon_button(
 
     tooltip(
         btn,
-        text(hint).font(App::body_font()).size(11).color(palette.text_muted),
+        text(hint)
+            .font(App::body_font())
+            .size(11)
+            .color(palette.text_muted),
         tooltip::Position::Bottom,
     )
     .gap(4)
@@ -1943,7 +1998,10 @@ fn window_control_button(
 
     tooltip(
         btn,
-        text(hint).font(App::body_font()).size(11).color(palette.text_muted),
+        text(hint)
+            .font(App::body_font())
+            .size(11)
+            .color(palette.text_muted),
         tooltip::Position::Bottom,
     )
     .gap(4)
@@ -1980,18 +2038,16 @@ fn window_control_style(
 fn text_editor_style(
     palette: Palette,
 ) -> impl Fn(&Theme, iced::widget::text_editor::Status) -> iced::widget::text_editor::Style {
-    move |_, _status| {
-        iced::widget::text_editor::Style {
-            background: Background::Color(with_alpha(palette.card_strong, 0.28)),
-            border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
-                radius: 0.0.into(),
-            },
-            placeholder: palette.text_soft,
-            value: palette.text_strong,
-            selection: with_alpha(palette.accent, 0.18),
-        }
+    move |_, _status| iced::widget::text_editor::Style {
+        background: Background::Color(with_alpha(palette.card_strong, 0.28)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        placeholder: palette.text_soft,
+        value: palette.text_strong,
+        selection: with_alpha(palette.accent, 0.18),
     }
 }
 
@@ -2118,10 +2174,7 @@ fn subtle_border_width() -> f32 {
     0.6
 }
 
-fn scrollbar_alpha(
-    recent_scroll_activity: bool,
-    status: iced::widget::scrollable::Status,
-) -> f32 {
+fn scrollbar_alpha(recent_scroll_activity: bool, status: iced::widget::scrollable::Status) -> f32 {
     if !scrollbar_is_visible(recent_scroll_activity, status) {
         return 0.0;
     }
@@ -2176,13 +2229,12 @@ fn separator(color: Color) -> iced::widget::Container<'static, Message> {
 #[cfg(test)]
 mod tests {
     use super::{
+        HoverRegion, MenuKind, MenuRegionState, ModalState, Palette, SectionTone, TITLEBAR_INSET_Y,
         about_body_message, about_repo_icon, body_surface_color, breadcrumb_path, card_radius,
-        content_section_gap, control_radius, header_bar_height, menu_close_deadline,
-        dismiss_icon, menu_close_delay, menu_overlay_offset_y, menu_shell_radius,
-        menu_should_close, next_menu_hover_state, open_anyway_icon, scrollbar_alpha,
-        subtle_border_width, toggle_menu, tree_indent, window_title_label,
-        HoverRegion, MenuKind, MenuRegionState, ModalState, Palette, SectionTone,
-        TITLEBAR_INSET_Y,
+        content_section_gap, control_radius, dismiss_icon, header_bar_height, menu_close_deadline,
+        menu_close_delay, menu_overlay_offset_y, menu_shell_radius, menu_should_close,
+        next_menu_hover_state, open_anyway_icon, scrollbar_alpha, subtle_border_width, toggle_menu,
+        tree_indent, window_title_label,
     };
     use crate::editor::EditorBuffer;
     use iced::keyboard::{self, Key, Modifiers};
@@ -2265,7 +2317,10 @@ mod tests {
 
     #[test]
     fn toggling_other_menu_switches_focus() {
-        assert_eq!(toggle_menu(Some(MenuKind::File), MenuKind::View), Some(MenuKind::View));
+        assert_eq!(
+            toggle_menu(Some(MenuKind::File), MenuKind::View),
+            Some(MenuKind::View)
+        );
     }
 
     #[test]
@@ -2452,8 +2507,8 @@ mod tests {
     #[test]
     fn cause5_exhaustive_should_close_truth_table() {
         let cases = [
-            (false, true),   // overlay left → close
-            (true,  false),  // on overlay → stay
+            (false, true), // overlay left → close
+            (true, false), // on overlay → stay
         ];
 
         for (overlay, expected) in cases {
@@ -2496,7 +2551,10 @@ mod tests {
             overlay_hovered: false,
         };
         let deadline = menu_close_deadline(now, state_out);
-        assert!(deadline.is_some(), "deadline should be set when overlay is out");
+        assert!(
+            deadline.is_some(),
+            "deadline should be set when overlay is out"
+        );
 
         // Mouse re-enters overlay → deadline should cancel
         let state_in = next_menu_hover_state(state_out, HoverRegion::Overlay, true);
@@ -2532,7 +2590,10 @@ mod tests {
         app.preview_open = true;
         let _ = app.update(super::Message::TogglePreview);
         assert!(!app.preview_open);
-        assert!(!app.preview_fullscreen, "hiding preview should exit fullscreen");
+        assert!(
+            !app.preview_fullscreen,
+            "hiding preview should exit fullscreen"
+        );
     }
 
     #[test]
@@ -2567,15 +2628,27 @@ mod tests {
 
     #[test]
     fn editor_key_binding_maps_ctrl_z_to_undo() {
-        let binding = super::editor_key_binding(key_press(
-            Key::Character("z".into()),
-            Modifiers::CTRL,
-        ));
+        let binding =
+            super::editor_key_binding(key_press(Key::Character("z".into()), Modifiers::CTRL));
 
         assert!(matches!(
             binding,
             Some(text_editor::Binding::Custom(super::Message::Undo))
         ));
+    }
+
+    #[test]
+    fn editor_cursor_motion_does_not_refresh_markdown_preview() {
+        let (mut app, _) = super::App::new(None);
+        app.editor
+            .set_from_disk(Some(PathBuf::from("notes.md")), "# Title".to_string());
+        app.markdown_items.clear();
+
+        let _ = app.update(super::Message::EditorAction(text_editor::Action::Move(
+            text_editor::Motion::Right,
+        )));
+
+        assert!(app.markdown_items.is_empty());
     }
 
     #[test]

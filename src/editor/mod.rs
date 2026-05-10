@@ -180,10 +180,7 @@ impl EditorBuffer {
     }
 }
 
-fn clamp_cursor(
-    content: &text_editor::Content,
-    cursor: CursorLocation,
-) -> text_editor::Cursor {
+fn clamp_cursor(content: &text_editor::Content, cursor: CursorLocation) -> text_editor::Cursor {
     let line_index = clamp_line(content, cursor.line.saturating_sub(1));
     let max_column = content
         .line(line_index)
@@ -225,14 +222,20 @@ mod tests {
 
         assert!(buffer.is_dirty());
         assert_eq!(buffer.line_numbers(), vec!["1", "2"]);
-        assert_eq!(buffer.cursor_location(), CursorLocation { line: 2, column: 6 });
+        assert_eq!(
+            buffer.cursor_location(),
+            CursorLocation { line: 2, column: 6 }
+        );
     }
 
     #[test]
     fn mark_saved_resets_dirty_state() {
         let mut buffer = EditorBuffer::new(None, "draft");
 
-        buffer.replace_text("draft v2".to_string(), CursorLocation { line: 1, column: 9 });
+        buffer.replace_text(
+            "draft v2".to_string(),
+            CursorLocation { line: 1, column: 9 },
+        );
         assert!(buffer.is_dirty());
 
         buffer.mark_saved();
@@ -251,7 +254,10 @@ mod tests {
 
         buffer.reload_from_disk(Some(path), "hello\nworld".to_string());
 
-        assert_eq!(buffer.cursor_location(), CursorLocation { line: 2, column: 4 });
+        assert_eq!(
+            buffer.cursor_location(),
+            CursorLocation { line: 2, column: 4 }
+        );
         assert!(!buffer.is_dirty());
     }
 
@@ -267,7 +273,10 @@ mod tests {
 
         buffer.reload_from_disk(Some(path), "z".to_string());
 
-        assert_eq!(buffer.cursor_location(), CursorLocation { line: 1, column: 2 });
+        assert_eq!(
+            buffer.cursor_location(),
+            CursorLocation { line: 1, column: 2 }
+        );
         assert!(!buffer.is_dirty());
     }
 
@@ -279,15 +288,24 @@ mod tests {
         buffer.apply_action(text_editor::Action::Edit(text_editor::Edit::Insert('b')));
 
         assert_eq!(buffer.text(), "ab");
-        assert_eq!(buffer.cursor_location(), CursorLocation { line: 1, column: 3 });
+        assert_eq!(
+            buffer.cursor_location(),
+            CursorLocation { line: 1, column: 3 }
+        );
 
         assert!(buffer.undo());
         assert_eq!(buffer.text(), "a");
-        assert_eq!(buffer.cursor_location(), CursorLocation { line: 1, column: 2 });
+        assert_eq!(
+            buffer.cursor_location(),
+            CursorLocation { line: 1, column: 2 }
+        );
 
         assert!(buffer.redo());
         assert_eq!(buffer.text(), "ab");
-        assert_eq!(buffer.cursor_location(), CursorLocation { line: 1, column: 3 });
+        assert_eq!(
+            buffer.cursor_location(),
+            CursorLocation { line: 1, column: 3 }
+        );
     }
 
     #[test]

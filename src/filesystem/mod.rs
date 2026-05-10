@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
 pub const SUPPORTED_FILE_EXTENSIONS: &[&str] = &[
-    "rs", "md", "txt", "json", "toml", "yaml", "yml", "js", "ts", "html", "css",
-    "php",
+    "rs", "md", "txt", "json", "toml", "yaml", "yml", "js", "ts", "html", "css", "php",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +102,7 @@ pub fn supported_file(path: &Path) -> bool {
 
 pub fn refresh_tree(tree: &mut FileNode) -> io::Result<()> {
     if let NodeKind::Directory {
-        expanded,
+        expanded: _,
         loaded,
         children,
     } = &mut tree.kind
@@ -145,12 +144,6 @@ pub fn refresh_tree(tree: &mut FileNode) -> io::Result<()> {
         }
 
         *children = merged;
-
-        if *expanded {
-            for child in children {
-                refresh_tree(child)?;
-            }
-        }
     }
 
     Ok(())
@@ -184,7 +177,7 @@ impl WorkspaceWatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tree, expand_directory, visible_nodes};
+    use super::{NodeKind, build_tree, expand_directory, visible_nodes};
     use std::fs;
 
     #[test]
@@ -226,6 +219,38 @@ mod tests {
 
         assert!(names.contains(&"docs".to_string()));
         assert!(!names.contains(&"guide.md".to_string()));
+    }
+
+    #[test]
+    fn build_tree_defers_closed_directory_children_until_expanded() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let root = temp_dir.path();
+        let docs = root.join("docs");
+
+        fs::create_dir(&docs).expect("docs dir");
+        fs::write(docs.join("guide.md"), "# guide").expect("guide");
+
+        let tree = build_tree(root).expect("tree");
+        let NodeKind::Directory { children, .. } = &tree.kind else {
+            panic!("root should be a directory");
+        };
+        let docs = children
+            .iter()
+            .find(|node| node.name == "docs")
+            .expect("docs node");
+
+        let NodeKind::Directory {
+            expanded,
+            loaded,
+            children,
+        } = &docs.kind
+        else {
+            panic!("docs should be a directory");
+        };
+
+        assert!(!expanded);
+        assert!(!loaded);
+        assert!(children.is_empty());
     }
 
     #[test]
@@ -355,8 +380,8 @@ fn build_directory_node(path: &Path) -> io::Result<FileNode> {
         path: path.to_path_buf(),
         kind: NodeKind::Directory {
             expanded: false,
-            loaded: true,
-            children: load_children(path)?,
+            loaded: false,
+            children: Vec::new(),
         },
     })
 }
@@ -380,10 +405,11 @@ fn load_children(path: &Path) -> io::Result<Vec<FileNode>> {
         })
         .collect::<Vec<_>>();
 
-    children.sort_by(|left, right| match (&left.kind, &right.kind) {
-        (NodeKind::Directory { .. }, NodeKind::File) => std::cmp::Ordering::Less,
-        (NodeKind::File, NodeKind::Directory { .. }) => std::cmp::Ordering::Greater,
-        _ => left.name.to_lowercase().cmp(&right.name.to_lowercase()),
+    children.sort_by_cached_key(|node| {
+        (
+            matches!(node.kind, NodeKind::File),
+            node.name.to_lowercase(),
+        )
     });
 
     Ok(children)
